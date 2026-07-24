@@ -6,7 +6,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.clearText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -113,7 +114,13 @@ class HomeScreenViewModel(
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state
 
+    // Hoisted into the ViewModel so the instance survives navigation and reset.
+    // The embedded keyboard binds to this state once; recreating it (e.g. via
+    // rememberTextFieldState) would leave the cached keyboard bound to a stale one.
+    val questionState = TextFieldState()
+
     fun reset() {
+        questionState.clearText()
         _state.value = State.Idle
     }
 
@@ -215,11 +222,10 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
 
     @Composable
     private fun QuestionInput() {
-        val textState = rememberTextFieldState("")
         val keyboardOptionsFlow = rememberKeyboardOptions()
         LightTextInputEditor(
             title = "Ask Claude",
-            state = textState,
+            state = viewModel.questionState,
             keyboardOptionsFlow = keyboardOptionsFlow,
             submitLabel = "ASK",
             submitIcon = LightIcons.SEARCH,

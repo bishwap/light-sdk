@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -43,11 +44,12 @@ class SettingsViewModel(
         }
     }
 
-    fun save(key: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            dataStore.edit { prefs ->
-                prefs[AskClaudePreferences.ANTHROPIC_API_KEY] = key.trim()
-            }
+    // Suspends until the write completes. The caller must await this before
+    // navigating back, otherwise popping this screen cancels viewModelScope and
+    // the DataStore write never lands.
+    suspend fun save(key: String) {
+        dataStore.edit { prefs ->
+            prefs[AskClaudePreferences.ANTHROPIC_API_KEY] = key.trim()
         }
     }
 }
@@ -64,6 +66,7 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         val initialKey by viewModel.initialKey.collectAsState()
+        val scope = rememberCoroutineScope()
 
         LightTheme(colors = themeColors) {
             Box(
@@ -82,8 +85,10 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
                         submitLabel = "SAVE",
                         submitIcon = LightIcons.TOGGLE_STATE_ON,
                         onSubmit = { result ->
-                            viewModel.save(result.toString())
-                            goBack()
+                            scope.launch {
+                                viewModel.save(result.toString())
+                                goBack()
+                            }
                         },
                         onBack = { goBack() },
                         modifier = Modifier.fillMaxSize(),
