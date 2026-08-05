@@ -54,7 +54,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-private const val CLAUDE_MODEL = "claude-3-5-haiku-latest"
+private const val CLAUDE_MODEL = "claude-haiku-4-5"
 private const val CLAUDE_MAX_TOKENS = 1024
 private const val CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 private const val ANTHROPIC_VERSION = "2023-06-01"
