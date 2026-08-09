@@ -87,6 +87,10 @@ class ConversationsViewModel(
         _uiState.update { it.copy(searching = false) }
     }
 
+    fun clearSearch() {
+        applySearch("")
+    }
+
     fun applySearch(query: String) {
         _uiState.update { it.copy(query = query.trim(), searching = false) }
         publish()

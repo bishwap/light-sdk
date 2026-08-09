@@ -128,7 +128,7 @@ class BlueBubblesClient(private val credentials: () -> ServerCredentials) {
         val normalized = if (host.startsWith("http://") || host.startsWith("https://")) {
             host
         } else {
-            "http://$host"
+            "https://$host"
         }
         return "$normalized/api/v1/$path"
     }
@@ -162,7 +162,12 @@ data class ServerCredentials(
 private fun newTempGuid(): String =
     "light-" + Random.nextLong(0, Long.MAX_VALUE).toString(16)
 
-fun Throwable.userMessage(): String = when (this) {
-    is BlueBubblesException -> message ?: "Server error"
-    else -> message?.takeIf { it.isNotBlank() } ?: "Could not reach the server"
+fun Throwable.userMessage(): String {
+    val detail = message?.takeIf { it.isNotBlank() }
+    return when {
+        detail == null -> "Could not reach the server"
+        detail.contains("CLEARTEXT", ignoreCase = true) ->
+            "Plain HTTP is blocked on device. Use an https:// server URL."
+        else -> detail
+    }
 }

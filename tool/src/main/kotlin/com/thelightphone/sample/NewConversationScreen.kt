@@ -3,10 +3,11 @@ package com.thelightphone.sample
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -68,6 +69,12 @@ class NewConversationViewModel(
         if (text.isEmpty()) return
         _uiState.update { it.copy(step = NewConversationStep.Sending) }
         viewModelScope.launch {
+            if (!session.awaitCredentials().isConfigured) {
+                _uiState.update { state ->
+                    state.copy(step = NewConversationStep.Failed(NOT_CONFIGURED_MESSAGE))
+                }
+                return@launch
+            }
             session.client.startChat(step.address, text)
                 .onSuccess {
                     _uiState.update { state ->
@@ -106,7 +113,7 @@ class NewConversationScreen(sealedActivity: SealedLightActivity) :
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         val state by viewModel.uiState.collectAsState()
-        val editorState = rememberTextFieldState("")
+        val editorState = remember(state.editorSession) { TextFieldState("") }
         val keyboardOptions = rememberKeyboardOptions()
 
         LightTheme(colors = themeColors) {

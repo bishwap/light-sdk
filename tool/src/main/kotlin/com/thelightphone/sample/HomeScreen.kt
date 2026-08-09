@@ -7,10 +7,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -49,7 +50,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         val state by viewModel.uiState.collectAsState()
-        val searchState = rememberTextFieldState("")
+        val searchState = remember(state.query) { TextFieldState(state.query) }
         val keyboardOptions = rememberKeyboardOptions()
 
         LightTheme(colors = themeColors) {
@@ -123,10 +124,17 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
                         icon = LightIcons.REFRESH,
                         onClick = viewModel::refresh,
                     ),
-                    LightBarButton.LightIcon(
-                        icon = LightIcons.SEARCH,
-                        onClick = viewModel::startSearch,
-                    ),
+                    if (state.query.isBlank()) {
+                        LightBarButton.LightIcon(
+                            icon = LightIcons.SEARCH,
+                            onClick = viewModel::startSearch,
+                        )
+                    } else {
+                        LightBarButton.LightIcon(
+                            icon = LightIcons.CLOSE,
+                            onClick = viewModel::clearSearch,
+                        )
+                    },
                 ),
             )
         }

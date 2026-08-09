@@ -6,10 +6,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -138,7 +139,6 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         val state by viewModel.uiState.collectAsState()
-        val fieldState = rememberTextFieldState("")
         val keyboardOptions = rememberKeyboardOptions()
 
         LightTheme(colors = themeColors) {
@@ -147,11 +147,15 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
                     .fillMaxSize()
                     .background(LightThemeTokens.colors.background),
             ) {
-                if (state.editing != SettingsField.None) {
+                val editing = state.editing
+                if (editing != SettingsField.None) {
+                    val fieldState = remember(editing) {
+                        TextFieldState(if (editing == SettingsField.ServerUrl) state.serverUrl else "")
+                    }
                     LightTextInputEditor(
-                        title = if (state.editing == SettingsField.ServerUrl) "Server URL" else "Password",
+                        title = if (editing == SettingsField.ServerUrl) "Server URL" else "Password",
                         state = fieldState,
-                        editorKey = state.editing,
+                        editorKey = editing,
                         keyboardOptionsFlow = keyboardOptions,
                         singleLine = true,
                         onSubmit = { viewModel.submit(it.toString()) },
