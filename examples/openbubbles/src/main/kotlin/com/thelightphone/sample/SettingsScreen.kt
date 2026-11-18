@@ -155,7 +155,6 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
                     LightTextInputEditor(
                         title = if (editing == SettingsField.ServerUrl) "Server URL" else "Password",
                         state = fieldState,
-                        editorKey = editing,
                         keyboardOptionsFlow = keyboardOptions,
                         singleLine = true,
                         onSubmit = { viewModel.submit(it.toString()) },
