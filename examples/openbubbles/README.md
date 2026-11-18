@@ -17,6 +17,11 @@ The checked-in `lighttool.toml` targets `com.lightos`:
 The debug APK is `build/outputs/apk/debug/openbubbles-debug.apk` within this
 module. The application ID remains `com.thelightphone.openbubbles`.
 
+Gradle also configures the repository's other tools. If another tool still
+targets the emulator, its metadata can block these commands. In that case,
+pass `-DlightSdk.allowAltServerPackage=true` to allow that configuration; this
+module still targets `com.lightos` until its own TOML is changed.
+
 ## Build for the emulator
 
 Follow the [system-app emulator setup](../../docs/system_app/README.md).
