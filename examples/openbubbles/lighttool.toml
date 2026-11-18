@@ -1,0 +1,8 @@
+[tool]
+id = "com.thelightphone.openbubbles"
+label = "OpenBubbles"
+versionCode = 1
+versionName = "1.0.0"
+permissions = ["android.permission.INTERNET"]
+# For emulator builds, use the alternate server package and opt-in in README.md.
+serverPackage = "com.lightos"
