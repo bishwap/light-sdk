@@ -130,6 +130,7 @@ class NewConversationScreen(sealedActivity: SealedLightActivity) :
                         editorKey = "address-${state.editorSession}",
                         keyboardOptionsFlow = keyboardOptions,
                         singleLine = true,
+                        autoCapitalize = false,
                         submitLabel = "NEXT",
                         onSubmit = { viewModel.submitAddress(it.toString()) },
                         onBack = { goBack() },

@@ -157,6 +157,8 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
                         state = fieldState,
                         keyboardOptionsFlow = keyboardOptions,
                         singleLine = true,
+                        autoCapitalize = false,
+                        password = editing == SettingsField.Password,
                         onSubmit = { viewModel.submit(it.toString()) },
                         onBack = viewModel::cancelEditing,
                         modifier = Modifier.fillMaxSize(),

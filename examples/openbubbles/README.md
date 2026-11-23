@@ -37,3 +37,12 @@ server package:
 Restore `serverPackage = "com.lightos"` before committing or building for a phone.
 The flag permits an alternate server package; it does not change the package
 embedded in the APK on its own.
+
+## SDK 0.2.10 text entry
+
+The editor uses the external Light keyboard app when available and falls back
+to the embedded keyboard otherwise. Settings passwords are masked while editing.
+Automatic sentence capitalization is disabled for server URLs, passwords, and
+recipient addresses; message editors use the SDK's automatic capitalization.
+Settings editors use the SDK's per-composition editor key so reopening an editor
+does not reuse a keyboard callback tied to an earlier text state.
