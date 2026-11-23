@@ -83,7 +83,7 @@ internal class HueApi {
 
     suspend fun listLights(ip: String, appKey: String): Result<List<UiLight>> = runCatching {
         val body = bridgeClient.get("https://$ip/api/$appKey/lights").bodyAsText()
-        ensureAuthorized(body)
+        throwOnHueError(json, body)
         json.decodeFromString<Map<String, HueLight>>(body)
             .map { (id, light) ->
                 UiLight(
@@ -102,7 +102,7 @@ internal class HueApi {
                 contentType(ContentType.Application.Json)
                 setBody(OnStateRequest(on))
             }.bodyAsText()
-            throwOnCommandError(body)
+            throwOnHueError(json, body)
         }
 
     /** Group 0 is the special "all lights" group on every bridge. */
@@ -111,28 +111,24 @@ internal class HueApi {
             contentType(ContentType.Application.Json)
             setBody(OnStateRequest(on))
         }.bodyAsText()
-        throwOnCommandError(body)
-    }
-
-    private fun ensureAuthorized(body: String) {
-        if (!body.trimStart().startsWith("[")) return
-        val results = runCatching { json.decodeFromString<List<HueCommandResult>>(body) }.getOrNull()
-        val error = results?.firstNotNullOfOrNull { it.error }
-        if (error != null) throw UnauthorizedException()
-    }
-
-    private fun throwOnCommandError(body: String) {
-        val results = runCatching { json.decodeFromString<List<HueCommandResult>>(body) }.getOrNull()
-            ?: return
-        val error = results.firstNotNullOfOrNull { it.error } ?: return
-        if (error.type == HUE_LINK_BUTTON_NOT_PRESSED) throw LinkButtonNotPressedException()
-        if (error.description.contains("unauthorized", ignoreCase = true)) throw UnauthorizedException()
-        throw IllegalStateException(error.description.ifBlank { "Bridge rejected the command." })
+        throwOnHueError(json, body)
     }
 
     fun close() {
         cloudClient.close()
         bridgeClient.close()
+    }
+}
+
+internal fun throwOnHueError(json: Json, body: String) {
+    if (!body.trimStart().startsWith("[")) return
+    val results = runCatching { json.decodeFromString<List<HueCommandResult>>(body) }.getOrNull()
+        ?: return
+    val error = results.firstNotNullOfOrNull { it.error } ?: return
+    when (error.type) {
+        HUE_UNAUTHORIZED_USER -> throw UnauthorizedException()
+        HUE_LINK_BUTTON_NOT_PRESSED -> throw LinkButtonNotPressedException()
+        else -> throw IllegalStateException(error.description.ifBlank { "Bridge rejected the request." })
     }
 }
 
