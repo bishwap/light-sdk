@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import com.thelightphone.sdk.LightScreen
 import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SealedLightActivity
+import com.thelightphone.sdk.textentry.LightTextEditResult
 import com.thelightphone.sdk.ui.LightBarButton
 import com.thelightphone.sdk.ui.LightIcons
 import com.thelightphone.sdk.ui.LightTextField
@@ -68,11 +69,12 @@ class UiDemoTextInputScreen(sealedActivity: SealedLightActivity) :
                     value = nameValue,
                     placeholder = "Your name",
                     onClick = {
-                        val editorRequest = EditorRequest(title = "Name", initialValue = nameValue)
-                        navigateTo(
-                            screenFactory = { UiDemoTextInputEditorScreen(it, editorRequest) },
-                            resultCallback = { viewModel.setName(it) }
-                        )
+                        editText(
+                            title = "Name",
+                            text = nameValue,
+                        ) { result ->
+                            if (result is LightTextEditResult.Submitted) viewModel.setName(result.text)
+                        }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
