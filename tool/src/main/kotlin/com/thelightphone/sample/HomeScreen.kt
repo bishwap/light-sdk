@@ -230,7 +230,12 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             submitLabel = "ASK",
             submitIcon = LightIcons.SEARCH,
             onSubmit = { viewModel.ask(it.toString()) },
-            onBack = { navigateTo(::SettingsScreen) },
+            onBack = { goBack() },
+            leftBottomBarItem = LightBarButton.LightIcon(
+                icon = LightIcons.SETTINGS,
+                onClick = { navigateTo(::SettingsScreen) },
+                contentDescription = "Settings",
+            ),
             modifier = Modifier.fillMaxSize(),
         )
     }
