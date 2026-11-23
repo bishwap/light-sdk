@@ -56,5 +56,6 @@ kotlin {
 
 dependencies {
     implementation(project(":sdk:client"))
+    implementation(libs.bouncycastle.provider)
     testImplementation(libs.kotlin.test)
 }
