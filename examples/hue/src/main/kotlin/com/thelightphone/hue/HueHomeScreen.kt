@@ -58,6 +58,11 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                     .fillMaxSize()
                     .background(LightThemeTokens.colors.background),
             ) {
+                val error = state.errorModal
+                if (error != null) {
+                    LightFullscreenModal(message = error, onClose = viewModel::dismissError)
+                    return@Box
+                }
                 when (val mode = state.mode) {
                     is HueScreenMode.Loading ->
                         StatusScreen(title = "Hue", message = "Loading…")
@@ -102,10 +107,6 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                             onRefresh = viewModel::loadLights,
                             onForget = viewModel::forgetBridge,
                         )
-                }
-
-                state.errorModal?.let { message ->
-                    LightFullscreenModal(message = message, onClose = viewModel::dismissError)
                 }
             }
         }
