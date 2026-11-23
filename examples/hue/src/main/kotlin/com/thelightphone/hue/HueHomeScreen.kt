@@ -12,6 +12,9 @@ import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -49,6 +52,7 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         val state by viewModel.uiState.collectAsState()
+        var confirmForget by remember { mutableStateOf(false) }
         val textFieldState = rememberTextFieldState("")
         val keyboardOptionsFlow = rememberKeyboardOptions()
 
@@ -61,6 +65,16 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                 val error = state.errorModal
                 if (error != null) {
                     LightFullscreenModal(message = error, onClose = viewModel::dismissError)
+                    return@Box
+                }
+                if (confirmForget && state.mode is HueScreenMode.Lights) {
+                    ForgetBridgeConfirmation(
+                        onCancel = { confirmForget = false },
+                        onForget = {
+                            confirmForget = false
+                            viewModel.forgetBridge()
+                        },
+                    )
                     return@Box
                 }
                 when (val mode = state.mode) {
@@ -105,11 +119,33 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                             onAllOff = viewModel::turnAllOff,
                             onAllOn = viewModel::turnAllOn,
                             onRefresh = viewModel::loadLights,
-                            onForget = viewModel::forgetBridge,
+                            onForget = { confirmForget = true },
                         )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ForgetBridgeConfirmation(onCancel: () -> Unit, onForget: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 1f.gridUnitsAsDp()),
+            contentAlignment = Alignment.Center,
+        ) {
+            LightText(
+                text = "Forget this bridge? You'll need to pair it again.",
+                variant = LightTextVariant.Copy,
+                align = TextAlign.Center,
+            )
+        }
+        LightBottomBar(
+            items = listOf(
+                LightBarButton.Text(text = "CANCEL", onClick = onCancel),
+                LightBarButton.Text(text = "FORGET", onClick = onForget),
+            ),
+        )
     }
 }
 
