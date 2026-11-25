@@ -98,7 +98,7 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                             keyboardOptionsFlow = keyboardOptionsFlow,
                             state = textFieldState,
                             onSubmit = viewModel::submitManualIp,
-                            onBack = viewModel::startDiscovery,
+                            onBack = { goBack() },
                             submitIcon = LightIcons.ACCEPT,
                             singleLine = true,
                             modifier = Modifier.fillMaxSize(),
