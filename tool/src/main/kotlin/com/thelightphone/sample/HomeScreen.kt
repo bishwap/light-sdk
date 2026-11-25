@@ -36,6 +36,8 @@ import com.thelightphone.sdk.ui.gridUnitsAsDp
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -45,7 +47,9 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -58,6 +62,7 @@ private const val CLAUDE_MODEL = "claude-haiku-4-5"
 private const val CLAUDE_MAX_TOKENS = 1024
 private const val CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 private const val ANTHROPIC_VERSION = "2023-06-01"
+private const val CLAUDE_REQUEST_TIMEOUT_MILLIS = 60_000L
 
 @Serializable
 private data class ClaudeMessage(
@@ -109,69 +114,86 @@ class HomeScreenViewModel(
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
         }
+        install(HttpTimeout) {
+            requestTimeoutMillis = CLAUDE_REQUEST_TIMEOUT_MILLIS
+        }
     }
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state
+    private var requestJob: Job? = null
 
     // Hoisted into the ViewModel so the instance survives navigation and reset.
     // The embedded keyboard binds to this state once; recreating it (e.g. via
     // rememberTextFieldState) would leave the cached keyboard bound to a stale one.
     val questionState = TextFieldState()
 
-    fun reset() {
+    fun newQuestion() {
         questionState.clearText()
+        editQuestion()
+    }
+
+    fun editQuestion() {
+        requestJob?.cancel()
+        requestJob = null
         _state.value = State.Idle
     }
 
-    fun ask(question: String) {
-        val trimmed = question.trim()
-        if (trimmed.isEmpty()) return
+    fun ask() {
+        val trimmed = questionState.text.toString().trim()
+        if (_state.value != State.Idle || trimmed.isEmpty()) return
 
         _state.value = State.Loading(trimmed)
-        viewModelScope.launch(Dispatchers.IO) {
-            val apiKey = dataStore.data.first()[AskClaudePreferences.ANTHROPIC_API_KEY]?.trim()
-            if (apiKey.isNullOrEmpty()) {
-                _state.value = State.Error(
-                    "No API key set. Open Settings to add your Anthropic API key.",
-                )
-                return@launch
-            }
-
-            _state.value = try {
-                val response: HttpResponse = client.post(CLAUDE_MESSAGES_URL) {
-                    header("x-api-key", apiKey)
-                    header("anthropic-version", ANTHROPIC_VERSION)
-                    contentType(ContentType.Application.Json)
-                    setBody(
-                        ClaudeRequest(
-                            model = CLAUDE_MODEL,
-                            maxTokens = CLAUDE_MAX_TOKENS,
-                            messages = listOf(ClaudeMessage(role = "user", content = trimmed)),
-                        ),
-                    )
-                }
-
-                if (response.status.isSuccess()) {
-                    val parsed: ClaudeResponse = response.body()
-                    val answer = parsed.content
-                        .filter { it.type == "text" }
-                        .joinToString("\n") { it.text }
-                        .trim()
-                    if (answer.isEmpty()) {
-                        State.Error("Claude returned an empty response.")
-                    } else {
-                        State.Answer(question = trimmed, text = answer)
-                    }
-                } else {
-                    val detail = runCatching { response.body<ClaudeErrorResponse>().error.message }
-                        .getOrNull()
-                        ?.takeIf { it.isNotEmpty() }
-                    State.Error(detail ?: "Request failed (${response.status.value}).")
-                }
+        requestJob = viewModelScope.launch {
+            val result = try {
+                requestAnswer(trimmed)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: HttpRequestTimeoutException) {
+                State.Error("The request timed out. Check your connection and try again.")
             } catch (e: Exception) {
                 State.Error(e.message ?: "Unknown error")
             }
+            ensureActive()
+            _state.value = result
+        }
+    }
+
+    private suspend fun requestAnswer(question: String): State {
+        val apiKey = dataStore.data.first()[AskClaudePreferences.ANTHROPIC_API_KEY]?.trim()
+        if (apiKey.isNullOrEmpty()) {
+            return State.Error("No API key set. Open Settings to add your Anthropic API key.")
+        }
+
+        val response: HttpResponse = client.post(CLAUDE_MESSAGES_URL) {
+            header("x-api-key", apiKey)
+            header("anthropic-version", ANTHROPIC_VERSION)
+            contentType(ContentType.Application.Json)
+            setBody(
+                ClaudeRequest(
+                    model = CLAUDE_MODEL,
+                    maxTokens = CLAUDE_MAX_TOKENS,
+                    messages = listOf(ClaudeMessage(role = "user", content = question)),
+                ),
+            )
+        }
+
+        if (!response.status.isSuccess()) {
+            val detail = runCatching { response.body<ClaudeErrorResponse>().error.message }
+                .getOrElse { if (it is CancellationException) throw it else null }
+                ?.takeIf { it.isNotEmpty() }
+            return State.Error(detail ?: "Request failed (${response.status.value}).")
+        }
+
+        val parsed: ClaudeResponse = response.body()
+        val answer = parsed.content
+            .filter { it.type == "text" }
+            .joinToString("\n") { it.text }
+            .trim()
+        return if (answer.isEmpty()) {
+            State.Error("Claude returned an empty response.")
+        } else {
+            State.Answer(question = question, text = answer)
         }
     }
 
@@ -203,11 +225,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             ) {
                 when (val s = state) {
                     is HomeScreenViewModel.State.Idle -> QuestionInput()
-                    is HomeScreenViewModel.State.Loading -> StatusContent(
-                        title = "Ask Claude",
-                        body = "Thinking…",
-                        detail = s.question,
-                    )
+                    is HomeScreenViewModel.State.Loading -> LoadingContent(s.question)
 
                     is HomeScreenViewModel.State.Answer -> AnswerContent(
                         question = s.question,
@@ -229,7 +247,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             keyboardOptionsFlow = keyboardOptionsFlow,
             submitLabel = "ASK",
             submitIcon = LightIcons.SEARCH,
-            onSubmit = { viewModel.ask(it.toString()) },
+            onSubmit = { viewModel.ask() },
             onBack = { goBack() },
             leftBottomBarItem = LightBarButton.LightIcon(
                 icon = LightIcons.SETTINGS,
@@ -241,23 +259,29 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
     }
 
     @Composable
-    private fun StatusContent(title: String, body: String, detail: String?) {
+    private fun LoadingContent(question: String) {
         Column(modifier = Modifier.fillMaxSize()) {
             LightTopBar(
-                center = LightTopBarCenter.Text(title),
-                modifier = Modifier.padding(bottom = 1f.gridUnitsAsDp()),
+                center = LightTopBarCenter.Text("Ask Claude"),
+                modifier = Modifier.padding(bottom = 0.5f.gridUnitsAsDp()),
             )
-            Column(modifier = Modifier.padding(horizontal = 1f.gridUnitsAsDp())) {
-                LightText(text = body, variant = LightTextVariant.Copy)
-                detail?.takeIf { it.isNotEmpty() }?.let {
-                    LightText(
-                        text = it,
-                        variant = LightTextVariant.Detail,
-                        lighten = true,
-                        modifier = Modifier.padding(top = 0.5f.gridUnitsAsDp()),
-                    )
-                }
+            LightScrollView(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 1f.gridUnitsAsDp()),
+            ) {
+                LightText(text = "Thinking…", variant = LightTextVariant.Copy)
+                LightText(
+                    text = question,
+                    variant = LightTextVariant.Detail,
+                    lighten = true,
+                    modifier = Modifier.padding(top = 0.5f.gridUnitsAsDp()),
+                )
             }
+            LightBottomBar(
+                items = listOf(LightBarButton.Text(text = "CANCEL", onClick = viewModel::editQuestion)),
+            )
         }
     }
 
@@ -283,7 +307,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             }
             LightBottomBar(
                 items = listOf(
-                    LightBarButton.Text(text = "ASK AGAIN", onClick = { viewModel.reset() }),
+                    LightBarButton.Text(text = "ASK AGAIN", onClick = viewModel::newQuestion),
                     LightBarButton.LightIcon(
                         icon = LightIcons.SETTINGS,
                         onClick = { navigateTo(::SettingsScreen) },
@@ -315,7 +339,7 @@ class HomeScreen(sealedActivity: SealedLightActivity) :
             }
             LightBottomBar(
                 items = listOf(
-                    LightBarButton.Text(text = "TRY AGAIN", onClick = { viewModel.reset() }),
+                    LightBarButton.Text(text = "EDIT QUESTION", onClick = viewModel::editQuestion),
                     LightBarButton.LightIcon(
                         icon = LightIcons.SETTINGS,
                         onClick = { navigateTo(::SettingsScreen) },

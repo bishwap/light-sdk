@@ -3,6 +3,7 @@ agp = "8.12.3"
 connector = "3.3.2"
 kotlin = "2.3.20"
 composeBom = "2026.03.01"
+coroutines = "1.10.2"
 ktor = "3.4.2"
 ksp = "2.3.6"
 camerax = "1.5.0"
@@ -33,8 +34,9 @@ compose-runtime = { module = "androidx.compose.runtime:runtime" }
 compose-activity = { module = "androidx.activity:activity-compose", version = "1.13.0" }
 androidx-annotation = { module = "androidx.annotation:annotation", version = "1.10.0" }
 androidx-splashscreen = { module = "androidx.core:core-splashscreen", version = "1.0.1" }
-kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version = "1.10.2" }
-kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version = "1.10.2" }
+kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version = "1.8.1" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
 androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version = "2.10.0" }
