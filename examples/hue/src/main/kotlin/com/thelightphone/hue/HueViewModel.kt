@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 sealed class HueScreenMode {
     data object Loading : HueScreenMode()
@@ -36,8 +37,6 @@ data class HueUiState(
 
 private const val NETWORK_ERROR =
     "The Hue tool needs to reach your bridge over Wi-Fi. Connect to the same network as your Hue bridge and try again."
-
-private data class SavedBridge(val ip: String, val id: String, val key: String)
 
 class HueViewModel(
     private val dataStore: DataStore<Preferences>,
@@ -129,7 +128,13 @@ class HueViewModel(
             setMode(mode.copy(message = "Pairing…"))
             api.pair(ip, mode.discoveredId).fold(
                 onSuccess = { (bridgeId, created) ->
-                    persistBridge(SavedBridge(ip, bridgeId, created.username))
+                    try {
+                        savedBridge.value = dataStore.saveHueBridge(SavedBridge(ip, bridgeId, created.username))
+                    } catch (_: IOException) {
+                        setMode(mode)
+                        showError("Couldn't save this pairing. Press the bridge's link button and try again.")
+                        return@fold
+                    }
                     loadLights()
                 },
                 onFailure = { error ->
@@ -245,17 +250,6 @@ class HueViewModel(
         _uiState.update { state ->
             val mode = state.mode as? HueScreenMode.Lights ?: return@update state
             state.copy(mode = transform(mode))
-        }
-    }
-
-    private suspend fun persistBridge(bridge: SavedBridge) {
-        savedBridge.value = bridge
-        runCatching {
-            dataStore.edit { prefs ->
-                prefs[HuePreferences.BRIDGE_IP] = bridge.ip
-                prefs[HuePreferences.BRIDGE_ID] = bridge.id
-                prefs[HuePreferences.APP_KEY] = bridge.key
-            }
         }
     }
 
