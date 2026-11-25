@@ -42,4 +42,6 @@ if (providers.systemProperty("lightSdk.toolOnly").orNull != "true") {
     project(":examples:authenticator").projectDir = file("examples/authenticator")
     include(":examples:audio-demo")
     project(":examples:audio-demo").projectDir = file("examples/audio-demo")
+    include(":examples:hue")
+    project(":examples:hue").projectDir = file("examples/hue")
 }
