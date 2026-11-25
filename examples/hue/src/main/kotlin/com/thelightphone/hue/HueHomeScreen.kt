@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,6 +22,7 @@ import androidx.compose.ui.text.style.TextAlign
 import com.thelightphone.sdk.InitialScreen
 import com.thelightphone.sdk.LightScreen
 import com.thelightphone.sdk.SealedLightActivity
+import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.rememberKeyboardOptions
 import com.thelightphone.sdk.ui.LightBarButton
 import com.thelightphone.sdk.ui.LightBottomBar
@@ -53,8 +55,6 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
         val themeColors by LightThemeController.colors.collectAsState()
         val state by viewModel.uiState.collectAsState()
         var confirmForget by remember { mutableStateOf(false) }
-        val textFieldState = rememberTextFieldState("")
-        val keyboardOptionsFlow = rememberKeyboardOptions()
 
         LightTheme(colors = themeColors) {
             Box(
@@ -89,20 +89,13 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                             bridges = mode.bridges,
                             onSelect = viewModel::selectBridge,
                             onEnterIp = viewModel::openManualIp,
+                            onBack = { goBack() },
                         )
 
                     is HueScreenMode.ManualIp ->
-                        LightTextInputEditor(
-                            title = "Bridge IP address",
-                            editorKey = state.manualIpSession,
-                            keyboardOptionsFlow = keyboardOptionsFlow,
-                            state = textFieldState,
-                            onSubmit = viewModel::submitManualIp,
-                            onBack = { goBack() },
-                            submitIcon = LightIcons.ACCEPT,
-                            singleLine = true,
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                        LaunchedEffect(state.manualIpSession) {
+                            navigateTo({ ManualIpScreen(it, viewModel) })
+                        }
 
                     is HueScreenMode.Pairing ->
                         PairingContent(
@@ -124,6 +117,41 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                 }
             }
         }
+    }
+}
+
+private class ManualIpScreen(
+    sealedActivity: SealedLightActivity,
+    private val viewModel: HueViewModel,
+) : SimpleLightScreen<Unit>(sealedActivity) {
+    @Composable
+    override fun Content() {
+        val themeColors by LightThemeController.colors.collectAsState()
+        val uiState by viewModel.uiState.collectAsState()
+        val textFieldState = rememberTextFieldState("")
+        val keyboardOptionsFlow = rememberKeyboardOptions()
+        LightTheme(colors = themeColors) {
+            val error = uiState.errorModal
+            if (error != null) {
+                LightFullscreenModal(message = error, onClose = viewModel::dismissError)
+            } else {
+                LightTextInputEditor(
+                    title = "Bridge IP address",
+                    keyboardOptionsFlow = keyboardOptionsFlow,
+                    state = textFieldState,
+                    onSubmit = { if (viewModel.submitManualIp(it)) goBack() },
+                    onBack = { goBack() },
+                    submitIcon = LightIcons.ACCEPT,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
+
+    override fun onScreenDestroy() {
+        viewModel.dismissError()
+        viewModel.closeManualIp()
     }
 }
 
@@ -170,15 +198,20 @@ private fun BridgePickerContent(
     bridges: List<DiscoveredBridge>,
     onSelect: (DiscoveredBridge) -> Unit,
     onEnterIp: () -> Unit,
+    onBack: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         LightTopBar(
-            center = LightTopBarCenter.Text("Choose bridge"),
+            leftButton = LightBarButton.LightIcon(icon = LightIcons.BACK, onClick = onBack),
+            center = LightTopBarCenter.Text(if (bridges.isEmpty()) "Pair bridge" else "Choose bridge"),
             modifier = Modifier.padding(bottom = 0.5f.gridUnitsAsDp()),
         )
         LightScrollView(
             modifier = Modifier.weight(1f).fillMaxWidth().padding(start = 1f.gridUnitsAsDp()),
         ) {
+            if (bridges.isEmpty()) {
+                LightText(text = "No bridge found. Enter its IP address to pair.", variant = LightTextVariant.Copy)
+            }
             bridges.forEach { bridge ->
                 Column(
                     modifier = Modifier

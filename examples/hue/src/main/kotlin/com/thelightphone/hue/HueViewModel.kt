@@ -20,7 +20,7 @@ sealed class HueScreenMode {
     data object Loading : HueScreenMode()
     data object Discovering : HueScreenMode()
     data class BridgePicker(val bridges: List<DiscoveredBridge>) : HueScreenMode()
-    data object ManualIp : HueScreenMode()
+    data class ManualIp(val previous: BridgePicker) : HueScreenMode()
     data class Pairing(val ip: String, val message: String, val discoveredId: String?) : HueScreenMode()
     data class Lights(
         val bridgeName: String,
@@ -33,7 +33,18 @@ data class HueUiState(
     val mode: HueScreenMode = HueScreenMode.Loading,
     val manualIpSession: Int = 0,
     val errorModal: String? = null,
-)
+) {
+    internal fun openManualIp(): HueUiState {
+        if (mode is HueScreenMode.ManualIp) return this
+        val previous = mode as? HueScreenMode.BridgePicker ?: HueScreenMode.BridgePicker(emptyList())
+        return copy(mode = HueScreenMode.ManualIp(previous), manualIpSession = manualIpSession + 1)
+    }
+
+    internal fun closeManualIp(): HueUiState {
+        val editor = mode as? HueScreenMode.ManualIp ?: return this
+        return copy(mode = editor.previous)
+    }
+}
 
 private const val NETWORK_ERROR =
     "The Hue tool needs to reach your bridge over Wi-Fi. Connect to the same network as your Hue bridge and try again."
@@ -95,18 +106,21 @@ class HueViewModel(
     }
 
     fun openManualIp() {
-        _uiState.update {
-            it.copy(mode = HueScreenMode.ManualIp, manualIpSession = it.manualIpSession + 1)
-        }
+        _uiState.update(HueUiState::openManualIp)
     }
 
-    fun submitManualIp(raw: CharSequence) {
+    fun closeManualIp() {
+        _uiState.update(HueUiState::closeManualIp)
+    }
+
+    fun submitManualIp(raw: CharSequence): Boolean {
         val ip = raw.toString().trim()
         if (!isValidHost(ip)) {
             _uiState.update { it.copy(errorModal = "Enter a valid IP address, e.g. 192.168.1.42") }
-            return
+            return false
         }
         beginPairing(ip)
+        return true
     }
 
     private fun beginPairing(ip: String, discoveredId: String? = null) {
