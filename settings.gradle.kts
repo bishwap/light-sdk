@@ -44,4 +44,6 @@ if (providers.systemProperty("lightSdk.toolOnly").orNull != "true") {
     project(":examples:audio-demo").projectDir = file("examples/audio-demo")
     include(":examples:hue")
     project(":examples:hue").projectDir = file("examples/hue")
+    include(":examples:openbubbles")
+    project(":examples:openbubbles").projectDir = file("examples/openbubbles")
 }
