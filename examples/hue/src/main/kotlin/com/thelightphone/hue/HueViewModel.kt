@@ -14,13 +14,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 sealed class HueScreenMode {
     data object Loading : HueScreenMode()
     data object Discovering : HueScreenMode()
     data class BridgePicker(val bridges: List<DiscoveredBridge>) : HueScreenMode()
-    data object ManualIp : HueScreenMode()
-    data class Pairing(val ip: String, val message: String) : HueScreenMode()
+    data class ManualIp(val previous: BridgePicker) : HueScreenMode()
+    data class Pairing(val ip: String, val message: String, val discoveredId: String?) : HueScreenMode()
     data class Lights(
         val bridgeName: String,
         val lights: List<UiLight>,
@@ -32,7 +33,18 @@ data class HueUiState(
     val mode: HueScreenMode = HueScreenMode.Loading,
     val manualIpSession: Int = 0,
     val errorModal: String? = null,
-)
+) {
+    internal fun openManualIp(): HueUiState {
+        if (mode is HueScreenMode.ManualIp) return this
+        val previous = mode as? HueScreenMode.BridgePicker ?: HueScreenMode.BridgePicker(emptyList())
+        return copy(mode = HueScreenMode.ManualIp(previous), manualIpSession = manualIpSession + 1)
+    }
+
+    internal fun closeManualIp(): HueUiState {
+        val editor = mode as? HueScreenMode.ManualIp ?: return this
+        return copy(mode = editor.previous)
+    }
+}
 
 private const val NETWORK_ERROR =
     "The Hue tool needs to reach your bridge over Wi-Fi. Connect to the same network as your Hue bridge and try again."
@@ -45,19 +57,17 @@ class HueViewModel(
     private val _uiState = MutableStateFlow(HueUiState())
     val uiState: StateFlow<HueUiState> = _uiState.asStateFlow()
 
-    private var bridgeIp: String? = null
-    private var appKey: String? = null
+    private val savedBridge = MutableStateFlow<SavedBridge?>(null)
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
             val prefs = dataStore.data.first()
-            bridgeIp = prefs[HuePreferences.BRIDGE_IP]
-            appKey = prefs[HuePreferences.APP_KEY]
-            val ip = bridgeIp
-            val key = appKey
+            val ip = prefs[HuePreferences.BRIDGE_IP]
+            val key = prefs[HuePreferences.APP_KEY]
             if (ip.isNullOrBlank() || key.isNullOrBlank()) {
                 startDiscovery()
             } else {
+                savedBridge.value = SavedBridge(ip, prefs[HuePreferences.BRIDGE_ID].orEmpty(), key)
                 loadLights()
             }
         }
@@ -92,30 +102,34 @@ class HueViewModel(
     }
 
     fun selectBridge(bridge: DiscoveredBridge) {
-        beginPairing(bridge.internalipaddress)
+        beginPairing(bridge.internalipaddress, bridge.id.ifBlank { null })
     }
 
     fun openManualIp() {
-        _uiState.update {
-            it.copy(mode = HueScreenMode.ManualIp, manualIpSession = it.manualIpSession + 1)
-        }
+        _uiState.update(HueUiState::openManualIp)
     }
 
-    fun submitManualIp(raw: CharSequence) {
+    fun closeManualIp() {
+        _uiState.update(HueUiState::closeManualIp)
+    }
+
+    fun submitManualIp(raw: CharSequence): Boolean {
         val ip = raw.toString().trim()
         if (!isValidHost(ip)) {
             _uiState.update { it.copy(errorModal = "Enter a valid IP address, e.g. 192.168.1.42") }
-            return
+            return false
         }
         beginPairing(ip)
+        return true
     }
 
-    private fun beginPairing(ip: String) {
+    private fun beginPairing(ip: String, discoveredId: String? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             setMode(
                 HueScreenMode.Pairing(
                     ip = ip,
                     message = "Press the link button on top of your Hue bridge, then tap Pair.",
+                    discoveredId = discoveredId,
                 ),
             )
         }
@@ -126,10 +140,15 @@ class HueViewModel(
         val ip = mode.ip
         viewModelScope.launch(Dispatchers.IO) {
             setMode(mode.copy(message = "Pairing…"))
-            api.pair(ip).fold(
-                onSuccess = { created ->
-                    val bridgeId = api.fetchConfig(ip).getOrNull()?.bridgeid.orEmpty()
-                    persistBridge(ip, bridgeId, created.username)
+            api.pair(ip, mode.discoveredId).fold(
+                onSuccess = { (bridgeId, created) ->
+                    try {
+                        savedBridge.value = dataStore.saveHueBridge(SavedBridge(ip, bridgeId, created.username))
+                    } catch (_: IOException) {
+                        setMode(mode)
+                        showError("Couldn't save this pairing. Press the bridge's link button and try again.")
+                        return@fold
+                    }
                     loadLights()
                 },
                 onFailure = { error ->
@@ -150,24 +169,35 @@ class HueViewModel(
     }
 
     fun loadLights() {
-        val ip = bridgeIp
-        val key = appKey
-        if (ip.isNullOrBlank() || key.isNullOrBlank()) {
+        val bridge = savedBridge.value
+        if (bridge == null) {
             startDiscovery()
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
+            if (!isHueBridgeId(bridge.id)) {
+                setMode(HueScreenMode.Lights(bridgeName = "Hue", lights = emptyList()))
+                showError("This saved pairing has no verified bridge ID. Use the gear to forget it and pair again.")
+                return@launch
+            }
             val current = _uiState.value.mode
             if (current !is HueScreenMode.Lights) setMode(HueScreenMode.Loading)
-            val name = api.fetchConfig(ip).getOrNull()?.name?.ifBlank { null } ?: "Hue"
-            api.listLights(ip, key).fold(
+            val (ip, result) = requestWithBridgeRediscovery(
+                bridge.ip, bridge.id, api::discoverBridges,
+            ) { api.listLights(it, bridge.id, bridge.key) }
+            if (savedBridge.value != bridge) return@launch
+            result.fold(
                 onSuccess = { lights ->
+                    val name = api.fetchConfig(ip, bridge.id).getOrNull()?.name?.ifBlank { null } ?: "Hue"
+                    if (savedBridge.value != bridge) return@fold
+                    if (ip != bridge.ip && !updateBridgeIp(bridge, ip)) return@fold
                     setMode(HueScreenMode.Lights(bridgeName = name, lights = lights))
                 },
                 onFailure = { error ->
                     if (error is UnauthorizedException) {
                         forgetBridge()
                     } else {
+                        val name = (current as? HueScreenMode.Lights)?.bridgeName ?: "Hue"
                         setMode(HueScreenMode.Lights(bridgeName = name, lights = emptyList()))
                         showError(error.friendlyMessage())
                     }
@@ -177,12 +207,11 @@ class HueViewModel(
     }
 
     fun toggleLight(light: UiLight) {
-        val ip = bridgeIp ?: return
-        val key = appKey ?: return
+        val bridge = savedBridge.value?.takeIf { isHueBridgeId(it.id) } ?: return
         val target = !light.on
         updateLightsMode { it.copy(lights = it.lights.replacing(light.id, target), busy = true) }
         viewModelScope.launch(Dispatchers.IO) {
-            api.setLightOn(ip, key, light.id, target).fold(
+            api.setLightOn(bridge.ip, bridge.id, bridge.key, light.id, target).fold(
                 onSuccess = { loadLights() },
                 onFailure = { error -> onCommandFailure(error) },
             )
@@ -194,13 +223,12 @@ class HueViewModel(
     fun turnAllOn() = setAll(true)
 
     private fun setAll(on: Boolean) {
-        val ip = bridgeIp ?: return
-        val key = appKey ?: return
+        val bridge = savedBridge.value?.takeIf { isHueBridgeId(it.id) } ?: return
         updateLightsMode { mode ->
             mode.copy(lights = mode.lights.map { it.copy(on = on) }, busy = true)
         }
         viewModelScope.launch(Dispatchers.IO) {
-            api.setAllLightsOn(ip, key, on).fold(
+            api.setAllLightsOn(bridge.ip, bridge.id, bridge.key, on).fold(
                 onSuccess = { loadLights() },
                 onFailure = { error -> onCommandFailure(error) },
             )
@@ -214,14 +242,13 @@ class HueViewModel(
                 prefs.remove(HuePreferences.BRIDGE_ID)
                 prefs.remove(HuePreferences.APP_KEY)
             }
-            bridgeIp = null
-            appKey = null
+            savedBridge.value = null
             startDiscovery()
         }
     }
 
     fun cancelToLights() {
-        if (appKey.isNullOrBlank()) startDiscovery() else loadLights()
+        if (savedBridge.value == null) startDiscovery() else loadLights()
     }
 
     private suspend fun onCommandFailure(error: Throwable) {
@@ -240,16 +267,19 @@ class HueViewModel(
         }
     }
 
-    private suspend fun persistBridge(ip: String, bridgeId: String, key: String) {
-        bridgeIp = ip
-        appKey = key
+    private suspend fun updateBridgeIp(bridge: SavedBridge, ip: String): Boolean {
         runCatching {
             dataStore.edit { prefs ->
-                prefs[HuePreferences.BRIDGE_IP] = ip
-                prefs[HuePreferences.BRIDGE_ID] = bridgeId
-                prefs[HuePreferences.APP_KEY] = key
+                if (
+                    prefs[HuePreferences.BRIDGE_IP] == bridge.ip &&
+                    prefs[HuePreferences.BRIDGE_ID] == bridge.id &&
+                    prefs[HuePreferences.APP_KEY] == bridge.key
+                ) {
+                    prefs[HuePreferences.BRIDGE_IP] = ip
+                }
             }
         }
+        return savedBridge.compareAndSet(bridge, bridge.copy(ip = ip))
     }
 
     override fun onCleared() {

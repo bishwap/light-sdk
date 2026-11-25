@@ -41,10 +41,16 @@ internal class HueApi {
         install(ContentNegotiation) { json(json) }
     }
 
-    // Local bridge HTTPS — trust is pinned to the Hue bridge root CAs.
-    private val bridgeClient = HttpClient(OkHttp) {
-        engine { preconfigured = HueBridgeTls.bridgeClient() }
-        install(ContentNegotiation) { json(json) }
+    private suspend fun <T> withBridgeClient(
+        expectedBridgeId: String?,
+        request: suspend (HttpClient) -> T,
+    ): T {
+        require(expectedBridgeId == null || isHueBridgeId(expectedBridgeId))
+        return HttpClient(OkHttp) {
+            followRedirects = false
+            engine { preconfigured = HueBridgeTls.bridgeClient(expectedBridgeId) }
+            install(ContentNegotiation) { json(json) }
+        }.use { request(it) }
     }
 
     suspend fun discoverBridges(): Result<List<DiscoveredBridge>> = runCatching {
@@ -53,26 +59,32 @@ internal class HueApi {
             .filter { it.internalipaddress.isNotBlank() }
     }
 
-    suspend fun fetchConfig(ip: String): Result<HueConfig> = runCatching {
-        bridgeClient.get("https://$ip/api/config").body<HueConfig>()
-    }
+    suspend fun fetchConfig(ip: String, bridgeId: String): Result<HueConfig> =
+        runCatching { readConfig(ip, bridgeId) }
 
-    /** Attempts to register with the bridge. Requires the link button to have been pressed. */
-    suspend fun pair(ip: String): Result<HueCreatedUser> = runCatching {
-        val body = bridgeClient.post("https://$ip/api") {
-            contentType(ContentType.Application.Json)
-            setBody(
-                CreateUserRequest(
-                    devicetype = "light_phone_3#hue tool",
-                    generateclientkey = true,
-                ),
-            )
-        }.bodyAsText()
+    private suspend fun readConfig(ip: String, expectedBridgeId: String?): HueConfig =
+        withBridgeClient(expectedBridgeId) { it.get("https://$ip/api/config").body<HueConfig>() }
+
+    /** Manual setup learns the ID from uncredentialed config, then verifies it before pairing. */
+    suspend fun pair(ip: String, discoveredId: String?): Result<Pair<String, HueCreatedUser>> = runCatching {
+        val bridgeId = discoveredId ?: readConfig(ip, expectedBridgeId = null).bridgeid
+        check(isHueBridgeId(bridgeId)) { "Could not verify the identity of this Hue bridge." }
+        val body = withBridgeClient(bridgeId) { client ->
+            client.post("https://$ip/api") {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    CreateUserRequest(
+                        devicetype = "light_phone_3#hue tool",
+                        generateclientkey = true,
+                    ),
+                )
+            }.bodyAsText()
+        }
 
         val results = json.decodeFromString<List<HueCommandResult>>(body)
         val created = results.firstNotNullOfOrNull { it.success }
         if (created != null && created.username.isNotBlank()) {
-            return@runCatching created
+            return@runCatching bridgeId to created
         }
         val error = results.firstNotNullOfOrNull { it.error }
         if (error?.type == HUE_LINK_BUTTON_NOT_PRESSED) {
@@ -81,9 +93,9 @@ internal class HueApi {
         throw IllegalStateException(error?.description?.ifBlank { null } ?: "Unable to pair with bridge.")
     }
 
-    suspend fun listLights(ip: String, appKey: String): Result<List<UiLight>> = runCatching {
-        val body = bridgeClient.get("https://$ip/api/$appKey/lights").bodyAsText()
-        ensureAuthorized(body)
+    suspend fun listLights(ip: String, bridgeId: String, appKey: String): Result<List<UiLight>> = runCatching {
+        val body = withBridgeClient(bridgeId) { it.get("https://$ip/api/$appKey/lights").bodyAsText() }
+        throwOnHueError(json, body)
         json.decodeFromString<Map<String, HueLight>>(body)
             .map { (id, light) ->
                 UiLight(
@@ -96,43 +108,42 @@ internal class HueApi {
             .sortedBy { it.name.lowercase() }
     }
 
-    suspend fun setLightOn(ip: String, appKey: String, lightId: String, on: Boolean): Result<Unit> =
+    suspend fun setLightOn(ip: String, bridgeId: String, appKey: String, lightId: String, on: Boolean): Result<Unit> =
         runCatching {
-            val body = bridgeClient.put("https://$ip/api/$appKey/lights/$lightId/state") {
-                contentType(ContentType.Application.Json)
-                setBody(OnStateRequest(on))
-            }.bodyAsText()
-            throwOnCommandError(body)
+            val body = withBridgeClient(bridgeId) { client ->
+                client.put("https://$ip/api/$appKey/lights/$lightId/state") {
+                    contentType(ContentType.Application.Json)
+                    setBody(OnStateRequest(on))
+                }.bodyAsText()
+            }
+            throwOnHueError(json, body)
         }
 
     /** Group 0 is the special "all lights" group on every bridge. */
-    suspend fun setAllLightsOn(ip: String, appKey: String, on: Boolean): Result<Unit> = runCatching {
-        val body = bridgeClient.put("https://$ip/api/$appKey/groups/0/action") {
-            contentType(ContentType.Application.Json)
-            setBody(OnStateRequest(on))
-        }.bodyAsText()
-        throwOnCommandError(body)
-    }
-
-    private fun ensureAuthorized(body: String) {
-        if (!body.trimStart().startsWith("[")) return
-        val results = runCatching { json.decodeFromString<List<HueCommandResult>>(body) }.getOrNull()
-        val error = results?.firstNotNullOfOrNull { it.error }
-        if (error != null) throw UnauthorizedException()
-    }
-
-    private fun throwOnCommandError(body: String) {
-        val results = runCatching { json.decodeFromString<List<HueCommandResult>>(body) }.getOrNull()
-            ?: return
-        val error = results.firstNotNullOfOrNull { it.error } ?: return
-        if (error.type == HUE_LINK_BUTTON_NOT_PRESSED) throw LinkButtonNotPressedException()
-        if (error.description.contains("unauthorized", ignoreCase = true)) throw UnauthorizedException()
-        throw IllegalStateException(error.description.ifBlank { "Bridge rejected the command." })
+    suspend fun setAllLightsOn(ip: String, bridgeId: String, appKey: String, on: Boolean): Result<Unit> = runCatching {
+        val body = withBridgeClient(bridgeId) { client ->
+            client.put("https://$ip/api/$appKey/groups/0/action") {
+                contentType(ContentType.Application.Json)
+                setBody(OnStateRequest(on))
+            }.bodyAsText()
+        }
+        throwOnHueError(json, body)
     }
 
     fun close() {
         cloudClient.close()
-        bridgeClient.close()
+    }
+}
+
+internal fun throwOnHueError(json: Json, body: String) {
+    if (!body.trimStart().startsWith("[")) return
+    val results = runCatching { json.decodeFromString<List<HueCommandResult>>(body) }.getOrNull()
+        ?: return
+    val error = results.firstNotNullOfOrNull { it.error } ?: return
+    when (error.type) {
+        HUE_UNAUTHORIZED_USER -> throw UnauthorizedException()
+        HUE_LINK_BUTTON_NOT_PRESSED -> throw LinkButtonNotPressedException()
+        else -> throw IllegalStateException(error.description.ifBlank { "Bridge rejected the request." })
     }
 }
 

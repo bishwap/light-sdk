@@ -10,14 +10,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import com.thelightphone.sdk.InitialScreen
 import com.thelightphone.sdk.LightScreen
 import com.thelightphone.sdk.SealedLightActivity
+import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.rememberKeyboardOptions
 import com.thelightphone.sdk.ui.LightBarButton
 import com.thelightphone.sdk.ui.LightBottomBar
@@ -49,8 +54,7 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         val state by viewModel.uiState.collectAsState()
-        val textFieldState = rememberTextFieldState("")
-        val keyboardOptionsFlow = rememberKeyboardOptions()
+        var confirmForget by remember { mutableStateOf(false) }
 
         LightTheme(colors = themeColors) {
             Box(
@@ -58,6 +62,21 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                     .fillMaxSize()
                     .background(LightThemeTokens.colors.background),
             ) {
+                val error = state.errorModal
+                if (error != null) {
+                    LightFullscreenModal(message = error, onClose = viewModel::dismissError)
+                    return@Box
+                }
+                if (confirmForget && state.mode is HueScreenMode.Lights) {
+                    ForgetBridgeConfirmation(
+                        onCancel = { confirmForget = false },
+                        onForget = {
+                            confirmForget = false
+                            viewModel.forgetBridge()
+                        },
+                    )
+                    return@Box
+                }
                 when (val mode = state.mode) {
                     is HueScreenMode.Loading ->
                         StatusScreen(title = "Hue", message = "Loading…")
@@ -70,20 +89,13 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                             bridges = mode.bridges,
                             onSelect = viewModel::selectBridge,
                             onEnterIp = viewModel::openManualIp,
+                            onBack = { goBack() },
                         )
 
                     is HueScreenMode.ManualIp ->
-                        LightTextInputEditor(
-                            title = "Bridge IP address",
-                            editorKey = state.manualIpSession,
-                            keyboardOptionsFlow = keyboardOptionsFlow,
-                            state = textFieldState,
-                            onSubmit = viewModel::submitManualIp,
-                            onBack = viewModel::startDiscovery,
-                            submitIcon = LightIcons.ACCEPT,
-                            singleLine = true,
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                        LaunchedEffect(state.manualIpSession) {
+                            navigateTo({ ManualIpScreen(it, viewModel) })
+                        }
 
                     is HueScreenMode.Pairing ->
                         PairingContent(
@@ -100,15 +112,68 @@ class HueHomeScreen(sealedActivity: SealedLightActivity) :
                             onAllOff = viewModel::turnAllOff,
                             onAllOn = viewModel::turnAllOn,
                             onRefresh = viewModel::loadLights,
-                            onForget = viewModel::forgetBridge,
+                            onForget = { confirmForget = true },
                         )
-                }
-
-                state.errorModal?.let { message ->
-                    LightFullscreenModal(message = message, onClose = viewModel::dismissError)
                 }
             }
         }
+    }
+}
+
+private class ManualIpScreen(
+    sealedActivity: SealedLightActivity,
+    private val viewModel: HueViewModel,
+) : SimpleLightScreen<Unit>(sealedActivity) {
+    @Composable
+    override fun Content() {
+        val themeColors by LightThemeController.colors.collectAsState()
+        val uiState by viewModel.uiState.collectAsState()
+        val textFieldState = rememberTextFieldState("")
+        val keyboardOptionsFlow = rememberKeyboardOptions()
+        LightTheme(colors = themeColors) {
+            val error = uiState.errorModal
+            if (error != null) {
+                LightFullscreenModal(message = error, onClose = viewModel::dismissError)
+            } else {
+                LightTextInputEditor(
+                    title = "Bridge IP address",
+                    keyboardOptionsFlow = keyboardOptionsFlow,
+                    state = textFieldState,
+                    onSubmit = { if (viewModel.submitManualIp(it)) goBack() },
+                    onBack = { goBack() },
+                    submitIcon = LightIcons.ACCEPT,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
+
+    override fun onScreenDestroy() {
+        viewModel.dismissError()
+        viewModel.closeManualIp()
+    }
+}
+
+@Composable
+private fun ForgetBridgeConfirmation(onCancel: () -> Unit, onForget: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 1f.gridUnitsAsDp()),
+            contentAlignment = Alignment.Center,
+        ) {
+            LightText(
+                text = "Forget this bridge? You'll need to pair it again.",
+                variant = LightTextVariant.Copy,
+                align = TextAlign.Center,
+            )
+        }
+        LightBottomBar(
+            items = listOf(
+                LightBarButton.Text(text = "CANCEL", onClick = onCancel),
+                LightBarButton.Text(text = "FORGET", onClick = onForget),
+            ),
+        )
     }
 }
 
@@ -133,15 +198,20 @@ private fun BridgePickerContent(
     bridges: List<DiscoveredBridge>,
     onSelect: (DiscoveredBridge) -> Unit,
     onEnterIp: () -> Unit,
+    onBack: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         LightTopBar(
-            center = LightTopBarCenter.Text("Choose bridge"),
+            leftButton = LightBarButton.LightIcon(icon = LightIcons.BACK, onClick = onBack),
+            center = LightTopBarCenter.Text(if (bridges.isEmpty()) "Pair bridge" else "Choose bridge"),
             modifier = Modifier.padding(bottom = 0.5f.gridUnitsAsDp()),
         )
         LightScrollView(
             modifier = Modifier.weight(1f).fillMaxWidth().padding(start = 1f.gridUnitsAsDp()),
         ) {
+            if (bridges.isEmpty()) {
+                LightText(text = "No bridge found. Enter its IP address to pair.", variant = LightTextVariant.Copy)
+            }
             bridges.forEach { bridge ->
                 Column(
                     modifier = Modifier

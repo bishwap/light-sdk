@@ -53,3 +53,4 @@ data class HueLight(
 
 /** Bridge error code returned when the link button has not been pressed yet. */
 internal const val HUE_LINK_BUTTON_NOT_PRESSED = 101
+internal const val HUE_UNAUTHORIZED_USER = 1

@@ -1,6 +1,9 @@
 package com.thelightphone.hue
 
 import okhttp3.OkHttpClient
+import org.bouncycastle.asn1.ASN1String
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.asn1.x500.style.BCStyle
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
@@ -9,13 +12,11 @@ import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
+import javax.security.auth.x500.X500Principal
 
 /**
- * A Hue bridge serves its local API over HTTPS with a certificate signed by one of Philips/Signify's
- * bridge root CAs. Because we reach the bridge by LAN IP (not by the hostname baked into the cert),
- * standard hostname verification can't apply — so instead we pin trust to those root CAs. Only a
- * genuine Hue bridge whose chain validates against them is accepted; hostname verification is then
- * relaxed since the pinned chain is the real trust boundary.
+ * The local API uses Hue's bridge roots and the bridge ID in the leaf certificate's common name.
+ * The IP address is only the route to that identity.
  *
  * The PEMs below are Signify's publicly published Hue bridge root certificates.
  */
@@ -50,20 +51,28 @@ hkjOPQQDAgNHADBEAiAk7duT+IHbOGO4UUuGLAEpyYejGZK9Z7V9oSfnvuQ5BQIg
 IYSgwwxHXm73/JgcU9lAM6c8Bmu3UE3kBIUwBs1qXFw=
 -----END CERTIFICATE-----"""
 
-    fun bridgeClient(): OkHttpClient {
+    private val client by lazy {
         val trustManager = buildTrustManager(listOf(ROOT_BRIDGE_PEM, HUE_ROOT_CA_01_PEM))
         val sslContext = SSLContext.getInstance("TLS").apply {
             init(null, arrayOf(trustManager), null)
         }
-        return OkHttpClient.Builder()
+        OkHttpClient.Builder()
             .sslSocketFactory(sslContext.socketFactory, trustManager)
-            // Chain trust is enforced by the pinned trust manager above; the LAN IP will never
-            // match the cert's baked-in hostname, so hostname verification is intentionally relaxed.
-            .hostnameVerifier { _, _ -> true }
+            .followRedirects(false)
+            .followSslRedirects(false)
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .build()
     }
+
+    fun bridgeClient(expectedBridgeId: String?): OkHttpClient = client.newBuilder()
+        .hostnameVerifier { _, session ->
+            runCatching {
+                val certificate = session.peerCertificates.firstOrNull() as? X509Certificate
+                certificate != null && matchesBridgeIdentity(certificate.subjectX500Principal, expectedBridgeId)
+            }.getOrDefault(false)
+        }
+        .build()
 
     private fun buildTrustManager(pems: List<String>): X509TrustManager {
         val certificateFactory = CertificateFactory.getInstance("X.509")
@@ -78,4 +87,17 @@ IYSgwwxHXm73/JgcU9lAM6c8Bmu3UE3kBIUwBs1qXFw=
         factory.init(keyStore)
         return factory.trustManagers.filterIsInstance<X509TrustManager>().first()
     }
+}
+
+private val BRIDGE_ID = Regex("[0-9a-fA-F]{16}")
+
+internal fun isHueBridgeId(value: String): Boolean = BRIDGE_ID.matches(value)
+
+internal fun matchesBridgeIdentity(subject: X500Principal, expectedBridgeId: String?): Boolean {
+    val commonNames = X500Name.getInstance(subject.encoded).getRDNs(BCStyle.CN)
+        .flatMap { it.typesAndValues.asList() }
+        .filter { it.type == BCStyle.CN }
+    val certificateId = (commonNames.singleOrNull()?.value as? ASN1String)?.string ?: return false
+    return isHueBridgeId(certificateId) &&
+        (expectedBridgeId == null || certificateId.equals(expectedBridgeId, ignoreCase = true))
 }
