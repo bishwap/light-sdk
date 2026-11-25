@@ -82,6 +82,8 @@ class SettingsScreen(sealedActivity: SealedLightActivity) :
                         state = textState,
                         keyboardOptionsFlow = keyboardOptionsFlow,
                         singleLine = true,
+                        autoCapitalize = false,
+                        password = true,
                         submitLabel = "SAVE",
                         submitIcon = LightIcons.TOGGLE_STATE_ON,
                         onSubmit = { result ->
